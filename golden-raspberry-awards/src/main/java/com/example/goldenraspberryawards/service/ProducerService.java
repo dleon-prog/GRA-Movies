@@ -17,50 +17,88 @@ public class ProducerService {
     }
 
     public Map<String, List<Map<String, Object>>> getProducersIntervals() {
-        List<Movie> winners = movieRepository.findAll()
-                .stream()
-                .filter(Movie::getWinner)
-                .collect(Collectors.toList());
+        List<Movie> winnerMovies = movieRepository.findByWinnerTrue();
+        Map<String, List<Integer>> producerWins = groupWinnersByProducer(winnerMovies);
 
-        Map<String, List<Integer>> producerWins = new HashMap<>();
-        for (Movie movie : winners) {
-            for (String producer : movie.getProducers().split(" and ")) {
-                producerWins.computeIfAbsent(producer.trim(), k -> new ArrayList<>()).add(movie.getYear());
-            }
+        List<Map<String, Object>> minIntervals = new ArrayList<>();
+        List<Map<String, Object>> maxIntervals = new ArrayList<>();
+
+        calculateIntervals(producerWins, minIntervals, maxIntervals);
+
+        return Map.of("min", minIntervals, "max", maxIntervals);
+    }
+
+    private Map<String, List<Integer>> groupWinnersByProducer(List<Movie> winnerMovies) {
+        return winnerMovies.stream()
+                .flatMap(movie -> Arrays.stream(movie.getProducers().split("(,| and )"))
+                        .map(String::trim)
+                        .map(producer -> Map.entry(producer, movie.getYear())))
+                .collect(Collectors.groupingBy(
+                        Map.Entry::getKey,
+                        Collectors.mapping(Map.Entry::getValue, Collectors.toList())
+                ));
+    }
+
+    private void calculateIntervals(Map<String, List<Integer>> producerWins, 
+                                    List<Map<String, Object>> minIntervals, 
+                                    List<Map<String, Object>> maxIntervals) {
+        producerWins.forEach((producer, years) -> {
+            List<Integer> sortedYears = sortYears(years);
+
+            calculateProducerIntervals(producer, sortedYears, minIntervals, maxIntervals);
+        });
+    }
+
+    private List<Integer> sortYears(List<Integer> years) {
+        return years.stream()
+                .sorted()
+                .toList();
+    }
+
+    private void calculateProducerIntervals(String producer, List<Integer> sortedYears,
+                                            List<Map<String, Object>> minIntervals, 
+                                            List<Map<String, Object>> maxIntervals) {
+        sortedYears.stream()
+                .reduce((previousYear, currentYear) -> {
+                    int interval = currentYear - previousYear;
+
+                    updateIntervalList(minIntervals, producer, previousYear, currentYear, interval, true);
+                    updateIntervalList(maxIntervals, producer, previousYear, currentYear, interval, false);
+
+                    return currentYear;
+                });
+    }
+
+    private void updateIntervalList(List<Map<String, Object>> intervals, 
+                                    String producer, int previousYear, 
+                                    int currentYear, int interval, boolean isMin) {
+        if (shouldReplaceIntervals(intervals, interval, isMin)) {
+            intervals.clear();
         }
 
-        List<Map<String, Object>> minList = new ArrayList<>();
-        List<Map<String, Object>> maxList = new ArrayList<>();
-
-        for (Map.Entry<String, List<Integer>> entry : producerWins.entrySet()) {
-            List<Integer> years = entry.getValue();
-            Collections.sort(years);
-
-            for (int i = 1; i < years.size(); i++) {
-                int interval = years.get(i) - years.get(i - 1);
-                Map<String, Object> result = Map.of(
-                        "producer", entry.getKey(),
-                        "interval", interval,
-                        "previousWin", years.get(i - 1),
-                        "followingWin", years.get(i)
-                );
-
-                if (minList.isEmpty() || interval < (int) minList.get(0).get("interval")) {
-                    minList.clear();
-                    minList.add(result);
-                } else if (interval == (int) minList.get(0).get("interval")) {
-                    minList.add(result);
-                }
-
-                if (maxList.isEmpty() || interval > (int) maxList.get(0).get("interval")) {
-                    maxList.clear();
-                    maxList.add(result);
-                } else if (interval == (int) maxList.get(0).get("interval")) {
-                    maxList.add(result);
-                }
-            }
+        if (intervals.isEmpty() || isSameInterval(intervals, interval)) {
+            intervals.add(createIntervalMap(producer, previousYear, currentYear, interval));
         }
+    }
 
-        return Map.of("min", minList, "max", maxList);
+    private boolean shouldReplaceIntervals(List<Map<String, Object>> intervals, int interval, boolean isMin) {
+        if (intervals.isEmpty()) return true;
+
+        int currentInterval = (int) intervals.get(0).get("interval");
+        return isMin ? interval < currentInterval : interval > currentInterval;
+    }
+
+    private boolean isSameInterval(List<Map<String, Object>> intervals, int interval) {
+        return !intervals.isEmpty() && (int) intervals.get(0).get("interval") == interval;
+    }
+
+    private Map<String, Object> createIntervalMap(String producer, int previousYear, 
+                                                  int currentYear, int interval) {
+        return Map.of(
+                "producer", producer,
+                "interval", interval,
+                "previousWin", previousYear,
+                "followingWin", currentYear
+        );
     }
 }
